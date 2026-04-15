@@ -15,6 +15,7 @@ env:
   SYNC_BRANCH: sync/upstream-pi-notify
   BASE_BRANCH: main
   COMMENT_MARKER: "<!-- omp-sync-pr-review -->"
+  GH_REPO: ${{ github.repository }}
 
 jobs:
   auto-merge-sync-pr:
