@@ -83,13 +83,12 @@ jobs:
             --jq '.[0].number')"
 
           pr_title="chore: sync upstream pi-notify (${UPSTREAM_SHA})"
-          pr_body=$(cat <<EOF
-Sync from upstream `ferologics/pi-notify`.
-
-- Upstream SHA: `${UPSTREAM_SHA}`
-- Source workflow: `${GITHUB_WORKFLOW}`
-EOF
-          )
+          pr_body="$(printf '%s\n' \
+            'Sync from upstream `ferologics/pi-notify`.' \
+            '' \
+            "- Upstream SHA: `${UPSTREAM_SHA}`" \
+            "- Source workflow: `${GITHUB_WORKFLOW}`"
+          )"
 
           if [ -n "${pr_number}" ]; then
             gh pr edit "${pr_number}" --title "${pr_title}" --body "${pr_body}"
