@@ -1,5 +1,8 @@
 # pi-notify
 
+
+> Temporary workflow probe: validate automated sync PR review and merge path.
+
 A [Pi](https://github.com/badlogic/pi-mono) extension that sends a native desktop notification when the agent finishes and is waiting for input.
 
 ![pi-notify demo](demo.gif)
