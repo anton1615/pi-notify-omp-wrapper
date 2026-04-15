@@ -148,17 +148,22 @@ jobs:
               printf '%s\n' '- Required secret(s) missing: OMP_BASE_URL, OMP_API_KEY, or OMP_MODEL_ID.'
             } > "${review_output_file}"
           else
-            asset_url="$(gh api repos/can1357/oh-my-pi/releases/latest --jq '[.assets[] | select(.name == "omp-linux-x64")][0].browser_download_url')"
+            release_json="$(gh api repos/can1357/oh-my-pi/releases/latest)"
+            asset_url="$(jq -r '[.assets[] | select(.name == "omp-linux-x64")][0].browser_download_url // empty' <<<"${release_json}")"
+            native_modern_url="$(jq -r '[.assets[] | select(.name == "pi_natives.linux-x64-modern.node")][0].browser_download_url // empty' <<<"${release_json}")"
+            native_baseline_url="$(jq -r '[.assets[] | select(.name == "pi_natives.linux-x64-baseline.node")][0].browser_download_url // empty' <<<"${release_json}")"
 
-            if [ -z "${asset_url}" ] || [ "${asset_url}" = "null" ]; then
+            if [ -z "${asset_url}" ] || [ -z "${native_modern_url}" ] || [ -z "${native_baseline_url}" ]; then
               verdict="BLOCKED"
               {
                 printf 'VERDICT: BLOCKED\n'
-                printf 'SUMMARY: Failed to resolve the latest OMP Linux x64 release asset.\n'
-                printf '%s\n' '- GitHub release asset omp-linux-x64 was not found.'
+                printf 'SUMMARY: Failed to resolve the latest OMP Linux x64 release assets.\n'
+                printf '%s\n' '- Required release assets were not all present: omp-linux-x64, pi_natives.linux-x64-modern.node, pi_natives.linux-x64-baseline.node.'
               } > "${review_output_file}"
             else
               curl -fsSL "${asset_url}" -o "${omp_bin}"
+              curl -fsSL "${native_modern_url}" -o "${RUNNER_TEMP}/pi_natives.linux-x64-modern.node"
+              curl -fsSL "${native_baseline_url}" -o "${RUNNER_TEMP}/pi_natives.linux-x64-baseline.node"
               chmod +x "${omp_bin}"
 
               export PI_CODING_AGENT_DIR="${agent_dir}"
