@@ -1,0 +1,235 @@
+name: OMP review sync PR
+
+on:
+  workflow_run:
+    workflows:
+      - Sync upstream pi-notify
+    types:
+      - completed
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+env:
+  SYNC_BRANCH: sync/upstream-pi-notify
+  BASE_BRANCH: main
+  COMMENT_MARKER: "<!-- omp-sync-pr-review -->"
+
+jobs:
+  review-sync-pr:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Find eligible sync PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh pr list \
+            --head "${SYNC_BRANCH}" \
+            --base "${BASE_BRANCH}" \
+            --state open \
+            --json number,isDraft,headRefOid,url \
+            --jq 'map(select(.isDraft == false))[0]')"
+
+          if [ -z "${pr_json}" ] || [ "${pr_json}" = "null" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(jq -r '.headRefOid' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+          echo "url=$(jq -r '.url' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+
+      - name: No eligible sync PR
+        if: steps.pr.outputs.found != 'true'
+        shell: bash
+        run: echo "No eligible sync PR found."
+
+      - name: Check out sync PR head
+        if: steps.pr.outputs.found == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+
+      - name: Review sync PR with OMP
+        if: steps.pr.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OMP_BASE_URL: ${{ secrets.OMP_BASE_URL }}
+          OMP_API_KEY: ${{ secrets.OMP_API_KEY }}
+          OMP_MODEL_ID: ${{ secrets.OMP_MODEL_ID }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          PR_HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          SOURCE_RUN_URL: ${{ github.event.workflow_run.html_url }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          agent_dir="$(mktemp -d)"
+          omp_bin="${RUNNER_TEMP}/omp"
+          prompt_file="${RUNNER_TEMP}/omp-review-prompt.md"
+          review_output_file="${RUNNER_TEMP}/omp-review-output.txt"
+          comment_file="${RUNNER_TEMP}/omp-review-comment.md"
+
+          cleanup() {
+            rm -rf "${agent_dir}"
+          }
+          trap cleanup EXIT
+
+          changed_files="$(gh pr diff "${PR_NUMBER}" --name-only || true)"
+          diffstat="$(gh pr diff "${PR_NUMBER}" --stat || true)"
+
+          {
+            printf '%s\n' 'You are reviewing a sync PR in a wrapper repository. Decide only whether this PR is safe to merge into main.'
+            printf '\n'
+            printf '%s\n' 'Return a machine-parseable result using exactly this structure:'
+            printf '%s\n' 'VERDICT: PASS|BLOCKED'
+            printf '%s\n' 'SUMMARY: <one sentence>'
+            printf '%s\n' '- <reason 1>'
+            printf '%s\n' '- <reason 2>'
+            printf '\n'
+            printf '%s\n' 'Rules:'
+            printf '%s\n' '- Focus on wrapper compatibility and mergeability.'
+            printf '%s\n' '- Only report issues that should block merging this sync PR.'
+            printf '%s\n' '- Ignore style, nits, and speculative concerns.'
+            printf '%s\n' '- Do not propose code edits or ask for follow-up work unless merge must be blocked.'
+            printf '%s\n' '- If you are unsure, choose BLOCKED.'
+            printf '%s\n' '- Use repository inspection only.'
+            printf '\n'
+            printf '%s\n' 'Context:'
+            printf '%s\n' "- PR: ${PR_URL}"
+            printf '%s\n' "- Reviewed head SHA: ${PR_HEAD_SHA}"
+            printf '%s\n' "- Source workflow run: ${SOURCE_RUN_URL}"
+            printf '%s\n' "- Fixed sync branch: ${SYNC_BRANCH} -> ${BASE_BRANCH}"
+            printf '\n'
+            printf '%s\n' 'Changed files:'
+            printf '%s\n' "${changed_files:-<none>}"
+            printf '\n'
+            printf '%s\n' 'Diff summary:'
+            printf '%s\n' "${diffstat:-<none>}"
+          } > "${prompt_file}"
+
+          {
+            printf '%s\n' 'providers:'
+            printf '%s\n' '  ci-review:'
+            printf '%s\n' "    baseUrl: ${OMP_BASE_URL}"
+            printf '%s\n' '    apiKey: OMP_API_KEY'
+            printf '%s\n' '    api: openai-completions'
+            printf '%s\n' '    models:'
+            printf '%s\n' "      - id: ${OMP_MODEL_ID}"
+            printf '%s\n' "        name: ${OMP_MODEL_ID}"
+            printf '%s\n' '        api: openai-completions'
+            printf '%s\n' '        reasoning: false'
+            printf '%s\n' '        input: [text]'
+            printf '%s\n' '        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }'
+            printf '%s\n' '        contextWindow: 128000'
+            printf '%s\n' '        maxTokens: 8192'
+          } > "${agent_dir}/models.yml"
+
+          verdict=""
+          omp_status=0
+
+          if [ -z "${OMP_BASE_URL}" ] || [ -z "${OMP_API_KEY}" ] || [ -z "${OMP_MODEL_ID}" ]; then
+            verdict="BLOCKED"
+            {
+              printf 'VERDICT: BLOCKED\n'
+              printf 'SUMMARY: Missing required OMP review configuration.\n'
+              printf '%s\n' '- Required secret(s) missing: OMP_BASE_URL, OMP_API_KEY, or OMP_MODEL_ID.'
+            } > "${review_output_file}"
+          else
+            asset_url="$(gh api repos/can1357/oh-my-pi/releases/latest --jq '[.assets[] | select(.name == "omp-linux-x64")][0].browser_download_url')"
+
+            if [ -z "${asset_url}" ] || [ "${asset_url}" = "null" ]; then
+              verdict="BLOCKED"
+              {
+                printf 'VERDICT: BLOCKED\n'
+                printf 'SUMMARY: Failed to resolve the latest OMP Linux x64 release asset.\n'
+                printf '%s\n' '- GitHub release asset omp-linux-x64 was not found.'
+              } > "${review_output_file}"
+            else
+              curl -fsSL "${asset_url}" -o "${omp_bin}"
+              chmod +x "${omp_bin}"
+
+              export PI_CODING_AGENT_DIR="${agent_dir}"
+
+              set +e
+              "${omp_bin}" -p @"${prompt_file}" \
+                --model "ci-review/${OMP_MODEL_ID}" \
+                --no-session \
+                --no-extensions \
+                --no-skills \
+                --no-rules \
+                --no-lsp \
+                --no-pty \
+                --tools read,grep,find,ast_grep \
+                > "${review_output_file}" 2>&1
+              omp_status=$?
+              set -e
+
+              verdict="$(awk '/^[[:space:]]*VERDICT:[[:space:]]*/ { sub(/^[[:space:]]*VERDICT:[[:space:]]*/, "", $0); gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0); print toupper($0); exit }' "${review_output_file}")"
+
+              if [ -z "${verdict}" ]; then
+                verdict="BLOCKED"
+                {
+                  printf 'VERDICT: BLOCKED\n'
+                  printf 'SUMMARY: OMP output did not include a parseable verdict.\n'
+                  printf -- '- Exit status: %s\n\n' "${omp_status}"
+                  cat "${review_output_file}"
+                } > "${review_output_file}.tmp"
+                mv "${review_output_file}.tmp" "${review_output_file}"
+              fi
+            fi
+          fi
+
+          if [ "${omp_status}" -ne 0 ] && [ "${verdict}" = "PASS" ]; then
+            verdict="BLOCKED"
+            {
+              printf 'VERDICT: BLOCKED\n'
+              printf 'SUMMARY: OMP exited non-zero despite returning PASS.\n'
+              printf -- '- Exit status: %s\n\n' "${omp_status}"
+              cat "${review_output_file}"
+            } > "${review_output_file}.tmp"
+            mv "${review_output_file}.tmp" "${review_output_file}"
+          fi
+
+          review_output="$(cat "${review_output_file}")"
+          if [ ${#review_output} -gt 30000 ]; then
+            review_output="${review_output:0:30000}"$'\n\n[truncated]'
+          fi
+
+          {
+            printf '%s\n' "${COMMENT_MARKER}"
+            printf '%s\n' "<!-- reviewed-head-sha: ${PR_HEAD_SHA} -->"
+            printf '%s\n' "<!-- verdict: ${verdict} -->"
+            printf '%s\n' '## OMP Sync PR Review'
+            printf '\n'
+            printf '%s\n' "- Reviewed head SHA: `${PR_HEAD_SHA}`"
+            printf '%s\n' "- Verdict: `${verdict}`"
+            printf '\n'
+            printf '%s\n' '```text'
+            printf '%s\n' "${review_output}"
+            printf '%s\n' '```'
+          } > "${comment_file}"
+
+          comment_id="$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- omp-sync-pr-review -->")))][-1].id // empty')"
+          comment_body="$(cat "${comment_file}")"
+
+          if [ -n "${comment_id}" ]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" --raw-field body="${comment_body}" >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="${comment_body}" >/dev/null
+          fi
+
+          if [ "${verdict}" != "PASS" ]; then
+            exit 1
+          fi

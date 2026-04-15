@@ -1,0 +1,121 @@
+name: Auto merge sync PR
+
+on:
+  workflow_run:
+    workflows:
+      - OMP review sync PR
+    types:
+      - completed
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  SYNC_BRANCH: sync/upstream-pi-notify
+  BASE_BRANCH: main
+  COMMENT_MARKER: "<!-- omp-sync-pr-review -->"
+
+jobs:
+  auto-merge-sync-pr:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Find eligible sync PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh pr list \
+            --head "${SYNC_BRANCH}" \
+            --base "${BASE_BRANCH}" \
+            --state open \
+            --json number,isDraft,state,headRefOid,url \
+            --jq 'map(select(.isDraft == false and .state == "OPEN"))[0]')"
+
+          if [ -z "${pr_json}" ] || [ "${pr_json}" = "null" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "number=$(jq -r '.number' <<<"${pr_json}")" >> "$GITHUB_OUTPUT"
+      - name: No eligible sync PR
+        if: steps.pr.outputs.found != 'true'
+        shell: bash
+        run: echo "No eligible sync PR found."
+
+      - name: Validate latest review marker comment
+        if: steps.pr.outputs.found == 'true'
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pr_json="$(gh pr view "${PR_NUMBER}" --json number,isDraft,state,headRefOid,url)"
+          pr_state="$(jq -r '.state' <<<"${pr_json}")"
+          pr_is_draft="$(jq -r '.isDraft' <<<"${pr_json}")"
+
+          if [ "${pr_state}" != "OPEN" ] || [ "${pr_is_draft}" != "false" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "reason=PR is no longer open and ready for merge." >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          current_head_sha="$(jq -r '.headRefOid' <<<"${pr_json}")"
+          echo "current_head_sha=${current_head_sha}" >> "$GITHUB_OUTPUT"
+
+          comments_json="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments")"
+          comment_json="$(jq -c --arg marker "${COMMENT_MARKER}" '[.[] | select(.user.login == "github-actions[bot]" and (.body | contains($marker)))][-1]' <<<"${comments_json}")"
+
+          if [ -z "${comment_json}" ] || [ "${comment_json}" = "null" ]; then
+            echo "Latest review marker comment not found." >&2
+            exit 1
+          fi
+
+          comment_body="$(jq -r '.body' <<<"${comment_json}")"
+          reviewed_head_sha="$(printf '%s\n' "${comment_body}" | sed -n 's/.*<!-- reviewed-head-sha: \([^>][^>]*\) -->.*/\1/p' | tail -n 1)"
+          verdict="$(printf '%s\n' "${comment_body}" | sed -n 's/.*<!-- verdict: \([^>][^>]*\) -->.*/\1/p' | tail -n 1 | tr '[:lower:]' '[:upper:]')"
+
+          if [ -z "${reviewed_head_sha}" ] || [ -z "${verdict}" ]; then
+            echo "Latest review marker comment is malformed." >&2
+            exit 1
+          fi
+
+          if [ "${reviewed_head_sha}" != "${current_head_sha}" ]; then
+            echo "Reviewed head SHA does not match current PR head SHA." >&2
+            exit 1
+          fi
+
+          if [ "${verdict}" != "PASS" ]; then
+            echo "Latest review verdict is not PASS." >&2
+            exit 1
+          fi
+
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Skip merge when PR is no longer eligible
+        if: steps.pr.outputs.found == 'true' && steps.review.outputs.ready != 'true'
+        shell: bash
+        run: echo "Sync PR is no longer eligible for auto-merge."
+
+      - name: Merge sync PR
+        if: steps.review.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          PR_HEAD_SHA: ${{ steps.review.outputs.current_head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh pr merge "${PR_NUMBER}" \
+            --merge \
+            --match-head-commit "${PR_HEAD_SHA}"
