@@ -1,0 +1,65 @@
+name: Sync upstream pi-notify
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-pi-notify
+  cancel-in-progress: false
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Clone upstream pi-notify
+        run: |
+          rm -rf .tmp-upstream
+          git clone --depth 1 https://github.com/ferologics/pi-notify.git .tmp-upstream
+          echo "UPSTREAM_SHA=$(git -C .tmp-upstream rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Sync upstream files into wrapper repo
+        id: sync
+        run: |
+          mkdir -p upstream-pi-notify
+          rsync -a --delete --exclude '.git' .tmp-upstream/ upstream-pi-notify/
+
+          if [ -z "$(git status --porcelain --untracked-files=all -- upstream-pi-notify)" ]; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run wrapper tests
+        if: steps.sync.outputs.updated == 'true'
+        run: bun test index.test.ts
+
+      - name: Commit synced upstream changes
+        if: steps.sync.outputs.updated == 'true'
+        run: |
+          git add --all upstream-pi-notify
+          git commit -m "chore: sync upstream pi-notify (${UPSTREAM_SHA})"
+
+      - name: Push to main
+        if: steps.sync.outputs.updated == 'true'
+        run: git push origin HEAD:main
