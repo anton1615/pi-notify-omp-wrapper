@@ -9,7 +9,34 @@ This repository has only two purposes:
 - preserve the upstream `pi-notify` notification logic
 - add a thin OMP wrapper so notifications are emitted only for the main agent (interactive runs with UI), not for subagents
 
+## Install
+
+### Local development
+
+```bash
+omp plugin link C:/Users/Anton/.omp/agent/extensions/pi-notify-main-only
+```
+
+If OMP is already running, restart it after linking or updating the extension.
+
+### Marketplace install
+
+Add the GitHub repo as a marketplace:
+
+```bash
+omp plugin marketplace add anton1615/pi-notify-omp-wrapper
+```
+
+Install the plugin from that marketplace:
+
+```bash
+omp plugin install pi-notify-omp-wrapper@pi-notify-omp-wrapper
+```
+
+
 ## Repository layout
+
+This repository is intentionally both the plugin repo root and the marketplace repo root.
 
 - `index.ts`
   - entry point for the OMP wrapper
@@ -23,6 +50,10 @@ This repository has only two purposes:
   - vendored copy of the upstream source
   - sourced from `ferologics/pi-notify`
   - synchronized automatically by workflow rather than maintained manually
+- `package.json`
+  - OMP plugin manifest for the repo root
+- `.claude-plugin/marketplace.json`
+  - marketplace catalog that exposes this repo root as `pi-notify-omp-wrapper`
 - `.github/workflows/sync-upstream-pr.yml`
   - syncs upstream daily and opens / updates the sync PR
 - `.github/workflows/omp-review-sync-pr.yml`
