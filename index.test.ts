@@ -91,6 +91,24 @@ describe("pi-notify main-only wrapper", () => {
         expect(writes).toEqual([]);
     });
 
+    test("notifies for interactive session compaction", async () => {
+        const harness = createHarness();
+        notifyExtension(harness.pi as never);
+
+        await harness.emit("session_compact", { hasUI: true }, { type: "session_compact" });
+
+        expect(writes).toEqual(["\u001b]777;notify;Pi;Ready for input\u0007"]);
+    });
+
+    test("suppresses compaction notifications for non-interactive sessions", async () => {
+        const harness = createHarness();
+        notifyExtension(harness.pi as never);
+
+        await harness.emit("session_compact", { hasUI: false }, { type: "session_compact" });
+
+        expect(writes).toEqual([]);
+    });
+
     test("suppresses completion notifications for non-interactive sessions", async () => {
         const harness = createHarness();
         notifyExtension(harness.pi as never);

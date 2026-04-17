@@ -2,17 +2,17 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import upstreamNotifyExtension from "./upstream-pi-notify/index";
 
 type InteractiveContext = { hasUI: boolean };
-type AgentEndHandler = (event: unknown, ctx: InteractiveContext) => Promise<unknown> | unknown;
+type InteractiveNotificationHandler = (event: unknown, ctx: InteractiveContext) => Promise<unknown> | unknown;
 type ToolExecutionStartEvent = { toolName?: string };
 
 function createMainOnlyApi(pi: ExtensionAPI): ExtensionAPI {
     const wrappedPi = Object.create(pi) as ExtensionAPI;
     const originalOn = pi.on.bind(pi) as unknown as (event: string, handler: unknown) => void;
-    const interactiveAgentEndHandlers: AgentEndHandler[] = [];
+    const interactiveNotificationHandlers: InteractiveNotificationHandler[] = [];
 
     originalOn("tool_execution_start", async (eventData: ToolExecutionStartEvent, ctx: InteractiveContext) => {
         if (eventData.toolName !== "ask") return;
-        for (const handler of interactiveAgentEndHandlers) {
+        for (const handler of interactiveNotificationHandlers) {
             await handler(eventData, ctx);
         }
     });
@@ -23,14 +23,16 @@ function createMainOnlyApi(pi: ExtensionAPI): ExtensionAPI {
             return;
         }
 
-        const wrappedHandler: AgentEndHandler = async (eventData, ctx) => {
+        const wrappedHandler: InteractiveNotificationHandler = async (eventData, ctx) => {
             if (!ctx.hasUI) return;
-            return await (handler as AgentEndHandler)(eventData, ctx);
+            return await (handler as InteractiveNotificationHandler)(eventData, ctx);
         };
 
-        interactiveAgentEndHandlers.push(wrappedHandler);
-        originalOn(event, wrappedHandler);
+        interactiveNotificationHandlers.push(wrappedHandler);
+        originalOn("agent_end", wrappedHandler);
+        originalOn("session_compact", wrappedHandler);
     }) as ExtensionAPI["on"];
+
 
     return wrappedPi;
 }
