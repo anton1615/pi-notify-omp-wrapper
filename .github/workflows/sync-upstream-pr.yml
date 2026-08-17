@@ -83,11 +83,11 @@ jobs:
             --jq '.[0].number')"
 
           pr_title="chore: sync upstream pi-notify (${UPSTREAM_SHA})"
-          pr_body="$(printf '%s\n' \
-            'Sync from upstream `ferologics/pi-notify`.' \
-            '' \
-            "- Upstream SHA: `${UPSTREAM_SHA}`" \
-            "- Source workflow: `${GITHUB_WORKFLOW}`"
+          pr_body="$(
+            printf '%s\n' 'Sync from upstream `ferologics/pi-notify`.'
+            printf '\n'
+            printf -- '- Upstream SHA: `%s`\n' "${UPSTREAM_SHA}"
+            printf -- '- Source workflow: `%s`\n' "${GITHUB_WORKFLOW}"
           )"
 
           if [ -n "${pr_number}" ]; then
