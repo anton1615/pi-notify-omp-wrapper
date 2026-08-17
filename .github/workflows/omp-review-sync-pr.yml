@@ -174,7 +174,7 @@ jobs:
                 --no-rules \
                 --no-lsp \
                 --no-pty \
-                --tools read,grep,find,ast_grep \
+                --tools read,grep,glob \
                 > "${review_output_file}" 2>&1
               omp_status=$?
               set -e
