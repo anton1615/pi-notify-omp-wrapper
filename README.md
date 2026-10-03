@@ -1,5 +1,9 @@
 # pi-notify OMP Wrapper
 
+> [!WARNING]
+> **Unmaintained — retired on 2026-10-03.**
+> Notifications are built into OMP 18.5 and enabled by default (`completion.notify` / `ask.notify`); use those instead of this extension.
+
 This repository is not the upstream `pi-notify` project itself. It is an Oh My Pi / OMP-specific wrapper around that upstream project.
 
 Upstream project: `ferologics/pi-notify`
@@ -8,6 +12,22 @@ Upstream project: `ferologics/pi-notify`
 This repository has only two purposes:
 - preserve the upstream `pi-notify` notification logic
 - add a thin OMP wrapper so notifications are emitted only for the main agent (interactive runs with UI), not for subagents
+
+## Why this extension was retired
+
+OMP 18.5 ships notifications natively and enables them by default, which makes this wrapper redundant and actively risky:
+
+- Completion notifications are built in and on by default: `completion.notify` (default `on`, `src/modes/settings.ts:1131-1142`), fired from `src/modes/controllers/event-controller.ts:2228-2229` and `src/modes/controllers/event-controller.ts:2718-2740`.
+- "Waiting for input" notifications are built in and on by default: `ask.notify` (default `on`, `src/modes/settings.ts:1176-1185`), fired from `src/tools/ask.ts:585-597`.
+- Those two cover exactly the events this wrapper notifies on (its wrapped `agent_end` handler and its `tool_execution_start(toolName === "ask")` hook), so with both installed the user gets duplicate notifications.
+- This wrapper does not respect OMP's suppression switches: the built-in path honors `PI_NOTIFICATIONS` (`pi-tui/src/terminal-capabilities.ts:294-299`) and `PI_NO_DESKTOP_NOTIFY` (`pi-tui/src/desktop-notify.ts:66-76`), while the wrapper checks neither.
+- Under `--mode rpc-ui`, `ctx.hasUI` is `true`, so the wrapper still writes OSC/BEL bytes directly to stdout — the same stream that carries the RPC JSON protocol — which can corrupt protocol output.
+- The only remaining increment is the wrapper's PowerShell toast on Windows Terminal, because the built-in terminal capability table sends just BEL there (`pi-tui/src/terminal-capabilities.ts:673-714` does not list Windows Terminal). That increment does not justify duplicate notifications plus the RPC protocol risk.
+
+### Migration
+
+- Remove this extension and use the built-ins: keep `completion.notify` and `ask.notify` enabled (both default to `on`).
+- If you specifically want WinRT toasts on Windows Terminal, write a small standalone tool that honors `PI_NOTIFICATIONS` (and `PI_NO_DESKTOP_NOTIFY`) instead of reviving this wrapper, or turn the built-in notifications off and accept the toast-only behavior.
 
 ## Install
 
